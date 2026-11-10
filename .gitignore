@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Environemnt variables & secrets
+.env
+.env.*
+
+# Allow the example template
+!.env.example
+
+# Databases
+*.db
+*sqlite
+*.sqlite3
+
+# Operating system
+.DS_Store
+
+# Editor
+.vscode/
