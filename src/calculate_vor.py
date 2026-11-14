@@ -171,6 +171,36 @@ def calculate_vor():
             subset=["replacement_points"]
         ).copy()
 
+        # Calculate positional VOR rankings
+        vor_df["position_rank"] = (
+            vor_df.groupby("position")["vor"]
+            .rank(method="min", ascending=False)
+            .astype(int)
+        )
+
+        # Calculate positional VOR rankings
+        vor_df["overall_rank"] = (
+            vor_df["vor"]
+            .rank(method="min", ascending=False)
+            .astype(int)
+        )
+
+        # Export VOR rankings to CSV
+        output_path = BASE_DIR / "data" / "vor_rankings.csv"
+
+        export_df = vor_df.sort_values(
+            ["overall_rank", "player_name"]
+        )
+
+        export_df.to_csv(
+            output_path,
+            index=False
+        )
+
+        print("\n===== VOR EXPORT =====")
+        print(f"VOR rankings saved to: {output_path}")
+        print(f"Total players exported: {len(export_df)}")
+
         # Display top 10 players at each position by VOR
         print("\n===== TOP 10 PLAYERS BY POSITIONAL VOR =====")
         for position in sorted(vor_df["position"].unique()):
