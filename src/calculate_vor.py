@@ -46,14 +46,6 @@ def calculate_vor():
         print("\nPlayers by position:")
         print(df["position"].value_counts().to_string())
 
-        # Define provisional replacement-level ranks
-        replacement_ranks = {
-            "QB": 17,
-            "RB": 17,
-            "WR": 33,
-            "TE": 17
-        }
-
         # Separate RB, WR, and TE players for flex analysis
         flex_df = df[
             df["position"].isin(["RB", "WR", "TE"])
@@ -126,6 +118,14 @@ def calculate_vor():
         print(
             rb_wr_te_flex["position"].value_counts().to_string()
         )
+
+        # Define provisional replacement-level ranks
+        replacement_ranks = {
+            "QB": 17,
+            "RB": starter_counts["RB"] + 1,
+            "WR": starter_counts["WR"] + 1,
+            "TE": starter_counts["TE"] + 1
+        }
 
         # Calculate replacement-level point by position
         replacement_points = {}
