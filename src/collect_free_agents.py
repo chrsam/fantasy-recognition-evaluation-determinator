@@ -1,62 +1,69 @@
 
-from collections import Counter
+import pandas as pd
+from pathlib import Path
 from src.espn_connection import connect_to_league
+
+# Locate database
+BASE_DIR = Path(__file__).resolve().parent.parent
+
 
 def collect_free_agents():
 
     league = connect_to_league()
 
-    print("===== ESPN FREE AGENT RETRIEVAL =====")
+    print("===== COLLECTING ESPN FREE AGENTS =====")
 
-    # Retrieve up to 50 available free agents
-    free_agents = league.free_agents(size=50)
+    # Retrieve up to 100 available free agents
+    free_agents = league.free_agents(size=100)
 
     print(f"\nFree agents retrieved: {len(free_agents)}")
 
-    # Display position breakdown
-    positions = [
-        getattr(player, "position", "Unknown")
-        for player in free_agents
-    ]
+    # Convert player objects into dictionaries
+    player_data = []
+    for player in free_agents:
+        player_data.append({
+            "player_id": player.playerId,
+            "player_name": player.name,
+            "position": player.position,
+            "nfl_team": player.proTeam,
+            "total_points": player.total_points,
+            "average_points": player.avg_points,
+            "projected_points": player.projected_total_points,
+            "projected_avg_points": player.projected_avg_points,
+            "projected_total_points": player.projected_total_points,
+            "injury_status": player.injuryStatus,
+            "percent_owned": player.percent_owned,
+            "percent_started": player.percent_started,
+            "on_team_id": player.onTeamId
+        })
+
+    # Create DataFrame
+    df = pd.DataFrame(player_data)
+
+    # Remove duplicate player IDs, if any
+    df = df.drop_duplicates(
+        subset=["player_id"]
+    )
+
+    # Save free-agent data
+    output_path = BASE_DIR / "data" / "free_agents.csv"
+
+    df.to_csv(
+        output_path,
+        index=False
+    )
+
+    print("\n===== FREE AGENT SUMMARY =====")
+    print(f"Unique players collected: {len(df)}")
 
     print("\nPlayers by position:")
-    print(Counter(positions))
+    print(df["position"].value_counts().to_string())
 
-    # Inspect the first player's available attributes
-    if free_agents:
-        sample_player = free_agents[0]
-        print("\n===== PLAYER ATTRIBUTE INSPECTION =====")
-        print(f"Player type: {type(sample_player)}")
-        attributes = [
-            attribute
-            for attribute in dir(sample_player)
-            if not attribute.startswith("_")
-        ]
-        print("\nAvailable attributes:")
-        print(attributes)
-        print("\nSample player information:")
-        for attribute in [
-            "name",
-            "playerId",
-            "position",
-            "proTeam",
-            "total_points",
-            "avg_points",
-            "projected_points",
-            "injuryStatus"
-        ]:
-            if hasattr(sample_player, attribute):
-                print(
-                    f"{attribute}: "
-                    f"{getattr(sample_player, attribute)}"
-                )
-        print("\n===== FIRST 10 FREE AGENTS =====")
-        for player in free_agents[:10]:
-            print(
-                f"{player.name} | "
-                f"{player.position} | "
-                f"{player.proTeam}"
-            )
+    print("\nPlayers with an assigned fantasy team:")
+    print((df["on_team_id"] != 0).sum())
+
+    print("\nSaved file:")
+    print(output_path)
 
 if __name__ == "__main__":
     collect_free_agents()    
