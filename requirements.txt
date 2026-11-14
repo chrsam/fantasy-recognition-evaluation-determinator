@@ -2,3 +2,4 @@ pandas
 numpy
 python-dotenv
 pytest
+espn-api
