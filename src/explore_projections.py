@@ -50,6 +50,27 @@ def explore_projections():
         print("\nProjection statistics:")
         print(df["projected_points"].describe().round(2))
 
+        print("\n===== ACTUAL VS PROJECTED POINTS =====")
+
+        df['actual_minus_projected'] = (
+            df["total_points"] - df["projected_points"]
+        )
+
+        print(
+            df[
+                [
+                    "player_name",
+                    "position",
+                    "total_points",
+                    "projected_points",
+                    "actual_minus_projected"
+                ]
+            ].sort_values(
+                "projected_points",
+                ascending=False
+            ).head(15).to_string(index=False)
+        )
+
         print("\n===== TOP 15 PROJECTED PLAYERS =====")
         print(
             df[

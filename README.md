@@ -40,6 +40,16 @@ Phase 3: SQLite database creation and data imports
 
 Phase 4: Fantasy Football Analytics and Player Evaluation
 
+Phase 5: Waiver-wire recommendations
+
+Phase 6: Trade evaluation
+
+Phase 7: Weekly match analysis
+
+Phase 8: AI recommendations
+
+Phase 9: Dashboard and presenation
+
 ## Author
 
 Personal sport analytics project.
