@@ -33,8 +33,11 @@ Initial development focuses on a 16-team ESPN fantasy football league using half
 ## Development Status
 
 Phase 1: Development Environment setup
+
 Phase 2: ESPN league data collection
+
 Phase 3: SQLite database creation and data imports
+
 Phase 4: Fantasy Football Analytics and Player Evaluation
 
 ## Author
