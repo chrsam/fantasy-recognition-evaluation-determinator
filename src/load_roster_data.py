@@ -38,6 +38,12 @@ def load_roster_data():
             subset=["player_id"]
         )
 
+        # Remove existing roster entries for this season
+        cursor.execute("""
+            DELETE FROM roster_entries
+            WHERE season = ?
+        """, (ESPN_SEASON,))
+
         # Insert or update player records
         for _, player in players_df.iterrows():
             cursor.execute("""
