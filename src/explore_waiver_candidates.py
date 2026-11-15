@@ -7,8 +7,16 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATABASE_PATH = BASE_DIR / "database" / "fantasy_league.db"
 VOR_PATH = BASE_DIR / "data" / "vor_rankings.csv"
+
 ESPN_SEASON = 2026
 TEAM_NAME = "A Thousand Myles"
+POSITIONS = ["QB", "RB", "WR", "TE"]
+INJURY_STATUSES = [
+    "QUESTIONABLE",
+    "DOUBTFUL",
+    "OUT",
+    "INJURY_RESERVE"
+]
 
 def explore_waiver_candidates():
     # Connect to database
@@ -24,7 +32,10 @@ def explore_waiver_candidates():
                 p.nfl_team,
                 re.lineup_slot,
                 re.average_points,
-                re.injury_status   
+                re.projected_avg_points,
+                re.projected_total_points,
+                re.injury_status,
+                re.active_status   
             FROM roster_entries re
             JOIN players p
                 ON re.player_id = p.player_id
@@ -50,7 +61,9 @@ def explore_waiver_candidates():
                 p.nfl_team,
                 fas.average_points,
                 fas.projected_avg_points,
+                fas.projected_total_points,
                 fas.injury_status,
+                fas.active_status,
                 fas.percent_owned,
                 fas.percent_started
             FROM free_agent_snapshots fas
@@ -76,6 +89,31 @@ def explore_waiver_candidates():
     # Load VOR rankings
     vor_df = pd.read_csv(VOR_PATH)
 
+    for df in [roster_df, free_agents_df]:
+        df["injury_status"] = (
+            df["injury_status"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .str.upper()
+        )
+
+        df["active_status"] = (
+            df["active_status"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .str.lower()
+        )
+
+    roster_df["lineup_slot"] = (
+        roster_df["lineup_slot"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .str.upper()
+    )
+
     # Attach VOR rankings to free agent records
     candidates_df = free_agents_df.merge(
         vor_df[["player_id", "vor", "position_rank"]],
@@ -83,21 +121,135 @@ def explore_waiver_candidates():
         how="left"
     )
 
-    # Identify active free agents at skill positions
+    print("\n===== FILTER DIAGNOSTICS =====")
+
+    print("\nRoster lineup slots:")
+    print(roster_df["lineup_slot"].value_counts(dropna=False))
+
+    print("\nRoster injury statuses:")
+    print(roster_df["injury_status"].value_counts(dropna=False))
+
+    print("\nRoster activity statuses:")
+    print(roster_df["active_status"].value_counts(dropna=False))
+
+    print("\nFree-agent injury statuses:")
+    print(free_agents_df["injury_status"].value_counts(dropna=False))
+
+    print("\nFree-agent activity statuses:")
+    print(free_agents_df["active_status"].value_counts(dropna=False))
+
+    # Immediate pickup candidates
+    # Identify active, healthy free agents at skill positions
     eligible_candidates = candidates_df[
         (candidates_df["injury_status"] == "ACTIVE")
-        & (candidates_df["position"].isin(["QB", "RB", "WR", "TE"]))
+        & (candidates_df["active_status"] == "active") 
+        & (candidates_df["position"].isin(POSITIONS))
     ].copy()
 
     # Identify active bench players on your roster
     bench_df = roster_df[
         (roster_df["lineup_slot"] == "BE")
         & (roster_df["injury_status"] == "ACTIVE")
-        & (roster_df["position"].isin(["QB", "RB", "WR", "TE"]))
+        & (roster_df["active_status"] == "active")
+        & (roster_df["position"].isin(POSITIONS))
     ].copy()
 
-    print("\n===== ACTIVE FREE AGENTS VS ACTIVE BENCH =====")
-    for position in ["QB", "RB", "WR", "TE"]:
+    # Compare every eligible free agent against the weakest
+    # active bench player at the same position
+
+    recommendation_rows = []
+    for position in POSITIONS:
+        position_bench = bench_df[
+            bench_df["position"] == position
+        ].sort_values("average_points")
+
+        position_free_agents = eligible_candidates[
+            eligible_candidates["position"] == position
+        ].copy()
+
+        # Skip positons without an active bench player
+        if position_bench.empty:
+            continue
+
+        weakest_bench = position_bench.iloc[0]
+
+        for _, candidate in position_free_agents.iterrows():
+            actual_difference = (
+                candidate["average_points"]
+                - weakest_bench["average_points"]
+            )
+
+            # Only compare projections when both are available
+            projected_difference = float("nan")
+
+            if(
+                candidate["projected_avg_points"] > 0
+                and weakest_bench["projected_avg_points"] > 0
+            ):
+                projected_difference = (
+                    candidate["projected_avg_points"]
+                    - weakest_bench["projected_avg_points"]
+                )
+
+            recommendation_rows.append({
+                "position": position,
+                "free_agent": candidate["player_name"],
+                "bench_player": weakest_bench["player_name"],
+                "free_agent_ppg": candidate["average_points"],
+                "bench_ppg": weakest_bench["average_points"],
+                "actual_ppg_difference": actual_difference,
+                "projected_ppg_difference": projected_difference,
+                "vor": candidate["vor"],
+                "percent_owned": candidate["percent_owned"]
+            })
+
+    recommendations_df = pd.DataFrame(recommendation_rows)
+
+    print("\n==== POTENTIAL BENCH UPGRADES =====")
+    if recommendations_df.empty:
+        print("No position comparisions available.")
+    else:
+        recommendations_df = recommendations_df.sort_values(
+            "actual_ppg_difference",
+            ascending=False
+        )
+
+        print(
+            recommendations_df[
+                [
+                    "position",
+                    "free_agent",
+                    "bench_player",
+                    "free_agent_ppg",
+                    "bench_ppg",
+                    "actual_ppg_difference",
+                    "projected_ppg_difference",
+                    "vor"
+                ]
+            ].to_string(index=False)
+        )
+
+    # Display current roster
+    print("\n===== YOUR CURRENT ROSTER =====")
+    print(f"Team: {TEAM_NAME}")
+    print(f"Players: {len(roster_df)}")
+
+    print(
+        roster_df[
+            [
+                "player_name",
+                "position",
+                "lineup_slot",
+                "average_points",
+                "projected_avg_points",
+                "injury_status",
+                "active_status"
+            ]
+        ].to_string(index=False)
+    )
+
+    print("\n===== FREE AGENTS VS ACTIVE BENCH =====")
+    for position in POSITIONS:
 
         print(f"\n--- {position} ---")
 
@@ -120,49 +272,49 @@ def explore_waiver_candidates():
         weakest_bench = position_bench.iloc[0]
         best_free_agent = position_free_agents.iloc[0]
 
-        improvement = (
+        actual_difference = (
             best_free_agent["average_points"]
             - weakest_bench["average_points"]
         )
 
-        print(
-            f"Weakest active bench player: "
-            f"{weakest_bench["player_name"]}"
-            f"{weakest_bench["average_points"]:.2f} PPG"
-        )
+        candidate_projection = best_free_agent["projected_avg_points"]
+        bench_projection = weakest_bench["projected_avg_points"]
+        projected_difference = None
+
+        if (
+            pd.notna(candidate_projection)
+            and pd.notna(bench_projection)
+            and candidate_projection > 0
+            and bench_projection > 0
+        ):
+            projected_difference = candidate_projection - bench_projection
 
         print(
-            f"Best active free agent: "
-            f"{best_free_agent["player_name"]}"
-            f"{best_free_agent["average_points"]:.2f} PPG"
+            f"Weakest active bench player: {weakest_bench['player_name']}"
         )
-
-        print(f"PPG difference: {improvement:+.2f}")
-
-
-    # Display current roster
-    print("\n===== YOUR CURRENT ROSTER =====")
-    print(f"Team: {TEAM_NAME}")
-    print(f"Players: {len(roster_df)}")
-
-    print(
-        roster_df[
-            [
-                "player_name",
-                "position",
-                "lineup_slot",
-                "average_points",
-                "injury_status"
-            ]
-        ].to_string(index=False)
-    )
+        print(f"Actual PPG: {weakest_bench['average_points']:.2f}")
+        print(f"Projected PPG: {weakest_bench['projected_avg_points']:.2f}")
+        print()
+        print(
+            f"Best free agent by VOR: {best_free_agent['player_name']}"
+        )
+        print(f"Actual PPG: {best_free_agent["average_points"]:.2f}")
+        print(f"Projected PPG: {best_free_agent['projected_avg_points']:.2f}")
+        print(f"VOR: {best_free_agent['vor']:.2f}")
+        print(f"Actual PPG difference: {actual_difference:+.2f}")
+        if projected_difference is not None:
+            print(f"Projected PPG difference: {projected_difference:+.2f}")
+        else:
+            print("Projected PPG difference: Unavailable")
 
     # Display top free agent candidates
-    print("\n===== TOP 20 FREE AGENTS BY VOR =====")
-    top_candidates = candidates_df.sort_values(
+    print("\n===== TOP 20 ELIGIBLE FREE AGENTS BY VOR =====")
+
+    top_candidates = eligible_candidates.sort_values(
         "vor",
         ascending=False
     ).head(20)
+
     print(
         top_candidates[
             [
@@ -176,12 +328,41 @@ def explore_waiver_candidates():
             ]
         ].to_string(index=False)
     )
+
+    # Display injured/questionable free agents separately
+    injured_candidates = candidates_df[
+        (candidates_df["injury_status"].isin(INJURY_STATUSES))
+        & (candidates_df["position"].isin(POSITIONS))
+    ].copy()
+
+    print("\n===== FREE AGENTS WITH INJURY DESIGNATIONS =====")
+
+    print(
+        injured_candidates[
+            [
+                "player_name",
+                "position",
+                "average_points",
+                "projected_avg_points",
+                "vor",
+                "percent_owned",
+                "injury_status"
+            ]
+        ]
+        .sort_values("vor", ascending=False)
+        .head(20)
+        .to_string(index=False)
+    )
+
     print("\n===== POSITION BREAKDOWN =====")
     print("\nCurrent roster:")
     print(roster_df["position"].value_counts())
 
-    print("\nFree agents:")
+    print("\nFree agents collected:")
     print(free_agents_df["position"].value_counts())
+
+    print("\nEligible immediate pickup candidates:")
+    print(eligible_candidates["position"].value_counts())
 
 if __name__ == "__main__":
     explore_waiver_candidates()
