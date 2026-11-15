@@ -22,6 +22,20 @@ def clean_value(value):
         return value.item()
     return value
 
+def ensure_column(connection, table, column, definition):
+    """Add a db column only if it doesn't already exist"""
+    existing_columns = [
+        row[1]
+        for row in connection.execute(
+            f"PRAGMA table_info({table})"
+        )
+    ]
+
+    if column not in existing_columns:
+        connection.execute(
+            f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
+        )
+
 def load_roster_data():
     # Read roster information
     rosters_df = pd.read_csv(ROSTERS_CSV_PATH)
@@ -32,6 +46,22 @@ def load_roster_data():
     try:
         connection.execute("PRAGMA foreign_keys = ON")
         cursor = connection.cursor()
+
+        # Add new projection and activity columns if needed
+        ensure_column(
+            connection, "roster_entries",
+            "projected_avg_points", "REAL"
+        )
+
+        ensure_column(
+            connection, "roster_entries",
+            "projected_total_points", "REAL"
+        )
+
+        ensure_column(
+            connection, "roster_entries",
+            "active_status", "TEXT"
+        )
 
         # Create a list of unique players
         players_df = rosters_df.drop_duplicates(
@@ -47,22 +77,48 @@ def load_roster_data():
         # Insert or update player records
         for _, player in players_df.iterrows():
             cursor.execute("""
-                INSERT INTO players (
+                INSERT INTO roster_entries (
+                    season,
+                    fantasy_team_id,
                     player_id,
-                    player_name,
-                    position,
-                    nfl_team
+                    lineup_slot,
+                    acquisition_type,
+                    injury_status,
+                    total_points,
+                    average_points,
+                    projected_points,
+                    projected_avg_points,
+                    projected_total_points,
+                    active_status
                 )
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(player_id) DO UPDATE SET
-                    player_name = excluded.player_name,
-                    position = excluded.position,
-                    nfl_team = excluded.nfl_team
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(
+                    season,
+                    fantasy_team_id,
+                    player_id
+                ) DO UPDATE SET
+                    lineup_slot = excluded.lineup_slot,
+                    acquisition_type = excluded.acquisition_type,
+                    injury_status = excluded.injury_status,
+                    total_points = excluded.total_points,
+                    average_points = excluded.average_points,
+                    projected_points = excluded.projected_points,
+                    projected_avg_points = excluded.projected_avg_points,
+                    projected_total_points = excluded.projected_total_points,
+                    active_status = excluded.active_status
             """, (
+                ESPN_SEASON,
+                int(player["fantasy_team_id"]),
                 int(player["player_id"]),
-                clean_value(player["player_name"]),
-                clean_value(player["position"]),
-                clean_value(player["nfl_team"])
+                clean_value(player["lineup_slot"]),
+                clean_value(player["acquisition_type"]),
+                clean_value(player["injury_status"]),
+                clean_value(player["total_points"]),
+                clean_value(player["average_points"]),
+                clean_value(player["projected_points"]),
+                clean_value(player["projected_avg_points"]),
+                clean_value(player["projected_total_points"]),
+                clean_value(player["active_status"])
             ))
 
         # Insert or update roster entries

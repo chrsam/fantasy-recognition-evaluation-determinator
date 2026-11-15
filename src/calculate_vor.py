@@ -6,6 +6,7 @@ from pathlib import Path
 # Locate database
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATABASE_PATH = BASE_DIR / "database" / "fantasy_league.db"
+ESPN_SEASON = 2026
 
 def calculate_vor():
     # Connect to SQLite database
@@ -14,20 +15,45 @@ def calculate_vor():
     try:
         # Retrieve player stats
         query = """
+            WITH latest_snapshot AS (
+                SELECT MAX(collected_at) AS collected_at
+                FROM free_agent_snapshots
+                WHERE season = ?
+            )
             SELECT
-                players.player_id,
-                players.player_name,
-                players.position,
-                teams.team_name AS fantasy_team,
-                roster_entries.average_points
-            FROM players
-            JOIN roster_entries
-                ON players.player_id = roster_entries.player_id
-            JOIN teams
-                ON roster_entries.fantasy_team_id = teams.team_id
+                p.player_id,
+                p.player_name,
+                p.position,
+                t.team_name AS fantasy_team,
+                re.average_points,
+                'ROSTERED' AS player_status
+            FROM roster_entries re
+            JOIN players p
+                ON re.player_id = p.player_id
+            JOIN teams t
+                ON re.fantasy_team_id = t.team_id
+            WHERE re.season = ?
+            UNION ALL
+            SELECT
+                p.player_id,
+                p.player_name,
+                p.position,
+                NULL AS fantasy_team,
+                fas.average_points,
+                'FREE AGENT' AS player_status
+            FROM free_agent_snapshots fas
+            JOIN players p
+                ON fas.player_id = p.player_id
+            JOIN latest_snapshot ls
+                ON fas.collected_at = ls.collected_at
+            WHERE fas.season = ?
         """
 
-        df = pd.read_sql_query(query, connection)
+        df = pd.read_sql_query(
+            query, 
+            connection,
+            params=[ESPN_SEASON, ESPN_SEASON, ESPN_SEASON]
+        )
 
         # Convert average points to numeric values
         df["average_points"] = pd.to_numeric(

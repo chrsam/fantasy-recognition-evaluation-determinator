@@ -39,7 +39,8 @@ def collect_free_agents():
                 "injury_status": player.injuryStatus,
                 "percent_owned": player.percent_owned,
                 "percent_started": player.percent_started,
-                "on_team_id": player.onTeamId
+                "on_team_id": player.onTeamId,
+                "active_status": player.active_status,
             })
 
     # Create DataFrame

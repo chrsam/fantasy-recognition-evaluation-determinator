@@ -44,6 +44,9 @@ def collect_roster_data(league):
                 "total_points": player.total_points,
                 "average_points": player.avg_points,
                 "projected_points": player.projected_total_points,
+                "projected_avg_points": player.projected_avg_points,
+                "projected_total_points": player.projected_total_points,
+                "active_status": player.active_status,
             }
 
             roster_data.append(player_record)
