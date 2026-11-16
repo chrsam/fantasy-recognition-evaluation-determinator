@@ -89,6 +89,13 @@ def explore_waiver_candidates():
     # Load VOR rankings
     vor_df = pd.read_csv(VOR_PATH)
 
+    # Attach VOR rankings to current roster players
+    roster_df = roster_df.merge(
+        vor_df[["player_id", "vor", "position_rank"]],
+        on="player_id",
+        how="left"
+    )
+
     for df in [roster_df, free_agents_df]:
         df["injury_status"] = (
             df["injury_status"]
@@ -120,6 +127,26 @@ def explore_waiver_candidates():
         on="player_id",
         how="left"
     )
+
+    # Verify VOR coverage for rostered skill-position players
+    skill_roster_df = roster_df[
+        roster_df["position"].isin(POSITIONS)
+    ]
+    missing_vor = skill_roster_df["vor"].isna()
+
+    print("\n===== ROSTER VOR VALIDATION =====")
+    print(f"Skill-position players: {len(skill_roster_df)}")
+    print(f"Players with VOR: {len(skill_roster_df) - missing_vor.sum()}")
+    print(f"Players missing VOR: {missing_vor.sum()}")
+
+    if missing_vor.any():
+        print("\nPlayers missing VOR:")
+        print(
+            skill_roster_df.loc[
+                missing_vor,
+                ["player_name", position]
+            ].to_string(index=False)
+        )
 
     print("\n===== FILTER DIAGNOSTICS =====")
 
@@ -156,7 +183,6 @@ def explore_waiver_candidates():
 
     # Compare every eligible free agent against the weakest
     # active bench player at the same position
-
     recommendation_rows = []
     for position in POSITIONS:
         position_bench = bench_df[
@@ -228,6 +254,106 @@ def explore_waiver_candidates():
                 ]
             ].to_string(index=False)
         )
+
+    # Starter slots eligible for each position
+    # Flex players are included wherever their slot allows them to play.
+    starter_slots = {
+        "QB": ["QB"],
+        "RB": ["RB", "RB/WR", "RB/WR/TE"],
+        "WR": ["WR", "RB/WR", "RB/WR/TE"],
+        "TE": ["TE", "RB/WR/TE"]
+    }
+
+    starter_recommendation_rows = []
+
+    for position in POSITIONS:
+        # Find current starters eligible at this position.
+        position_starters =roster_df[
+            (roster_df["lineup_slot"].isin(starter_slots[position]))
+            & (roster_df["position"] == position)
+        ].copy()
+
+        # Find eligible free agents at this position
+        position_free_agents = eligible_candidates[
+            eligible_candidates["position"] == position
+        ].copy()
+
+        if position_starters.empty or position_free_agents.empty:
+            continue
+
+        # Identify the lowest-scoring starter at this position
+        weakest_starter = position_starters.sort_values(
+            "average_points"
+        ).iloc[0]
+
+        for _, candidate in position_free_agents.iterrows():
+            actual_difference = (
+                candidate["average_points"]
+                - weakest_starter["average_points"]
+            )
+
+            # Compare projections only when both are available
+            projected_difference = float("nan")
+
+            candidate_projection = candidate["projected_avg_points"]
+            starter_projection = weakest_starter["projected_avg_points"]
+
+            if (
+                pd.notna(candidate_projection)
+                and pd.notna(starter_projection)
+                and candidate_projection > 0
+                and starter_projection > 0
+            ):
+                projected_difference = (
+                    candidate_projection - starter_projection
+                )
+
+            starter_recommendation_rows.append({
+                "position": position,
+                "free_agent": candidate["player_name"],
+                "weakest_starter": weakest_starter["player_name"],
+                "starter_injury_status": weakest_starter["injury_status"],
+                "free_agent_ppg": candidate["average_points"],
+                "starter_ppg": weakest_starter["average_points"],
+                "actual_ppg_difference": actual_difference,
+                "projected_ppg_difference": projected_difference,
+                "vor": candidate["vor"]
+            })
+
+    starter_recommendations_df = pd.DataFrame(
+        starter_recommendation_rows
+    )
+
+    print("\n===== POTENTIAL STARTER UPGRADES =====")
+    if starter_recommendations_df.empty:
+        print("No starter comparisons available.")
+    else:
+        starter_recommendations_df = starter_recommendations_df.sort_values(
+            "actual_ppg_difference",
+            ascending=False
+        )
+        for position in POSITIONS:
+            position_results = starter_recommendations_df[
+                starter_recommendations_df["position"] == position
+            ].head(5)
+            print(f"\n--- {position} ---")
+            if position_results.empty:
+                print("No comparisons available.")
+                continue
+            print(
+                position_results[
+                    [
+                        "free_agent",
+                        "weakest_starter",
+                        "starter_injury_status",
+                        "free_agent_ppg",
+                        "starter_ppg",
+                        "actual_ppg_difference",
+                        "projected_ppg_difference",
+                        "vor"
+                    ]
+                ].to_string(index=False)
+            )
 
     # Display current roster
     print("\n===== YOUR CURRENT ROSTER =====")
