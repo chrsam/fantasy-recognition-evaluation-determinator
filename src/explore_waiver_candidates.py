@@ -17,6 +17,18 @@ INJURY_STATUSES = [
     "OUT",
     "INJURY_RESERVE"
 ]
+POSITION_TARGETS = {
+    "QB": 2,
+    "RB": 4,
+    "WR": 4,
+    "TE": 2,
+}
+POSITION_WEIGHTS = {
+    "QB": 1.0,
+    "RB": 1.5,
+    "WR": 2.0,
+    "TE": 1.0,
+}
 
 def explore_waiver_candidates():
     # Connect to database
@@ -121,6 +133,41 @@ def explore_waiver_candidates():
         .str.upper()
     )
 
+    # Count healthy, active players at each skill position.
+    # Injured, inactive, and IR players do not count towards
+    # our usable positional depth.
+    usable_roster_df = roster_df[
+        (roster_df["active_status"] == "active") 
+        & (roster_df["injury_status"] == "ACTIVE")
+        & (roster_df["lineup_slot"] != "IR")
+        & (roster_df["position"].isin(POSITION_TARGETS))
+    ].copy()
+
+    position_counts = (
+        usable_roster_df["position"]
+        .value_counts()
+        .to_dict()
+    )
+
+    position_gaps = {}
+
+    for position, target in POSITION_TARGETS.items():
+        current_count = position_counts.get(position, 0)
+        position_gaps[position] = max(
+            target - current_count,
+            0
+        )
+
+    print("\n===== CURRENT POSITIONAL NEEDS =====")
+    for position, target in POSITION_TARGETS.items():
+        current_count = position_counts.get(position, 0)
+        gap = position_gaps[position]
+
+        print(
+            f"{position}: {current_count}/{target} "
+            f"| Players needed: {gap}"
+        )
+
     # Attach VOR rankings to free agent records
     candidates_df = free_agents_df.merge(
         vor_df[["player_id", "vor", "position_rank"]],
@@ -180,6 +227,185 @@ def explore_waiver_candidates():
         & (roster_df["active_status"] == "active")
         & (roster_df["position"].isin(POSITIONS))
     ].copy()
+
+    # Identify potential add/drop transactions.
+    # Compare each eligible free agent against every healthy
+    # active bench player, regardless of position.
+    transaction_rows = []
+    for _, candidate in eligible_candidates.iterrows():
+        for _, drop_player in bench_df.iterrows():
+            # Calculate the diference in VOR.
+            vor_improvement = (
+                candidate["vor"] - drop_player["vor"]
+            ) 
+
+            # Calculate historical scoring difference
+            actual_difference = (
+                candidate["average_points"]
+                - drop_player["average_points"]
+            )
+
+            # Compare projections only when both are available.
+            projected_difference = float("nan")
+
+            candidate_projection = candidate["projected_avg_points"]
+            drop_projection = drop_player["projected_avg_points"]
+
+            if (
+                pd.notna(candidate_projection)
+                and pd.notna(drop_projection)
+                and candidate_projection > 0
+                and drop_projection > 0
+            ):
+                projected_difference = (
+                    candidate_projection - drop_projection
+                )
+
+            # Determine whether the pickup address a
+            # positional depth shortage
+            pickup_position = candidate["position"]
+            position_need_gap = position_gaps.get(
+                pickup_position, 0
+            )
+            if position_need_gap >= 2:
+                position_need = "HIGH"
+                position_need_rank = 1
+            elif position_need_gap == 1:
+                position_need = "MODERATE"
+                position_need_rank = 2
+            else:
+                position_need = "LOW"
+                position_need_rank = 3
+
+            # Calculate positional depth after the transaction.
+            post_transaction_counts = position_counts.copy()
+
+            # Remove the dropped player's position.
+            post_transaction_counts[drop_player["position"]] = (
+                post_transaction_counts.get(
+                    drop_player["position"], 0
+                ) - 1
+            )
+
+            # Add the pickup's position.
+            post_transaction_counts[pickup_position] = (
+                post_transaction_counts.get(
+                    pickup_position, 0
+                ) + 1
+            )
+
+            # Identify whether the transaction leaves a position empty.
+            positions_below_minimum = [
+                position
+                for position, count in post_transaction_counts.items()
+                if count < 1
+            ]
+
+            # Calculate remaining positional shortages.
+            remaining_gaps = {}
+            for position, target in POSITION_TARGETS.items():
+                current_count = post_transaction_counts.get(
+                    position, 0
+                )
+                remaining_gaps[position] = max(
+                    target - current_count,
+                    0
+                )
+
+            current_weighted_gap = sum(
+                position_gaps[position] * POSITION_WEIGHTS[position]
+                for position in POSITION_TARGETS
+            )
+            post_weighted_gap = sum(
+                remaining_gaps[position] * POSITION_WEIGHTS[position]
+                for position in POSITION_TARGETS
+            )
+            weighted_gap_improvement = (
+                current_weighted_gap - post_weighted_gap
+            )
+
+            total_remaining_gaps = sum(
+                remaining_gaps.values()
+            )
+            total_current_gaps = sum(position_gaps.values())
+            positional_gap_improvement = (
+                total_current_gaps - total_remaining_gaps
+            )
+
+            new_position_gaps = [
+                position
+                for position in POSITION_TARGETS
+                if remaining_gaps[position] > position_gaps[position]
+            ]
+
+            transaction_rows.append({
+                "pickup": candidate["player_name"],
+                "pickup_position": candidate["position"],
+                "drop": drop_player["player_name"],
+                "drop_position": drop_player["position"],
+                "pickup_vor": candidate["vor"],
+                "drop_vor": drop_player["vor"],
+                "vor_improvement": vor_improvement,
+                "actual_ppg_difference": actual_difference,
+                "projected_ppg_difference": projected_difference,  
+                "position_need": position_need,
+                "position_need_gap": position_need_gap,
+                "position_need_rank": position_need_rank, 
+                "post_pickup_depth": post_transaction_counts.get(
+                    pickup_position, 0
+                ),  
+                "post_pickup_depth": post_transaction_counts.get(
+                    drop_player["position"], 0
+                ),  
+                "positional_gap_improvement": positional_gap_improvement,
+                "total_remaining_gaps": total_remaining_gaps,
+                "weighted_gap_improvement": weighted_gap_improvement,
+                "positions_below_minimum": positions_below_minimum,
+                "new_position_gaps": new_position_gaps,
+            })
+
+    transactions_df = pd.DataFrame(transaction_rows)
+
+    # Keep only transactions that improve VOR.
+    if not transactions_df.empty:
+        transactions_df = transactions_df[
+            transactions_df["vor_improvement"] > 0
+        ].copy()
+
+        transactions_df = transactions_df.sort_values(
+            by=[
+                "weighted_gap_improvement",
+                "vor_improvement"
+            ],
+            ascending=[
+                False,
+                False
+            ]
+        )
+
+    print("\n===== TOP POTENTIAL ADD/DROP TRANSACTIONS =====")
+    print(f"Positive-VOR transactions: {len(transactions_df)}")
+    if not transactions_df.empty:
+        display_columns = [
+            "pickup",
+            "pickup_position",
+            "drop",
+            "drop_position",
+            "positional_gap_improvement",
+            "total_remaining_gaps",
+            "weighted_gap_improvement",
+            "positions_below_minimum",
+            "new_position_gaps",
+            "vor_improvement",
+            "actual_ppg_difference",
+            "projected_ppg_difference"
+        ]
+
+        print(
+            transactions_df[display_columns]
+            .head(15)
+            .to_string(index=False)
+        )
 
     # Compare every eligible free agent against the weakest
     # active bench player at the same position
