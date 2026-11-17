@@ -88,6 +88,16 @@ def create_database():
                 FOREIGN KEY (league_id) REFERENCES leagues(league_id),
                 UNIQUE (league_id, slot_name)
             );
+
+            CREATE TABLE IF NOT EXISTS player_weekly_stats (
+                season INTEGER NOT NULL,
+                player_id INTEGER NOT NULL,
+                week INTEGER NOT NULL,
+                points REAL NOT NULL,
+                collected_at TEXT NOT NULL,
+                PRIMARY KEY (season, player_id, week),
+                FOREIGN KEY (player_id) REFERENCES players(player_id)
+            );
         """)
 
         connection.commit()

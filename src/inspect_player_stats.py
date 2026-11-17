@@ -20,24 +20,13 @@ def inspect_player_stats():
         print(f"\n===== {label} =====")
         print(f"Name: {player.name}")
 
-        for attribute in dir(player):
-            if any(
-                keyword in attribute.lower()
-                for keyword in [
-                    "game",
-                    "point",
-                    "project",
-                    "stat",
-                    "injur"
-                ]
-            ):
-                if not attribute.startswith("_"):
-                    try:
-                        value = getattr(player, attribute)
-                        if not callable(value):
-                            print(f"{attribute}: {value}")
-                    except Exception:
-                        pass
+        print("\n===== PLAYER STATS =====")
+        if hasattr(player, "stats"):
+            for week, stats in player.stats.items():
+                print(f"\nWeek: {week}")
+                print(f"Stats: {stats}")
+        else:
+            print("No weekly statistics available.")
 
 if __name__ == "__main__":
     inspect_player_stats()

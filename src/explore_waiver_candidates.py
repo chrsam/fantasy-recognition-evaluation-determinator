@@ -49,9 +49,15 @@ def classify_transaction(row):
         and row["actual_ppg_difference"] >= 0
     )
     value_improves = row["vor_improvement"]
-    weighted_gap_improvement = (
-        row["weighted_gap_improvement"]
-    )
+    weighted_gap_improvement = row["weighted_gap_improvement"]
+
+    # Missing VOR or positional data cannot support a recommendation.
+    if (
+        pd.isna(value_improves)
+        or pd.isna(weighted_gap_improvement)
+    ):
+        return "LOW PRIORITY"
+    
 
     # Reject transactions that leave insufficient depth
     if not depth_is_acceptable:
@@ -139,6 +145,50 @@ def explain_transaction(row):
         )
 
     return " ".join(explanation)
+
+def process_transactions(transaction_rows):
+    """Convert transaction records into a classified
+    explained, and ranked DataFrame."""
+
+    transactions_df = pd.DataFrame(transaction_rows)
+    if transactions_df.empty:
+        return transactions_df
+    
+    # Apply recommendation classifications
+    transactions_df["recommendation"] = (
+        transactions_df.apply(
+            classify_transaction,
+            axis=1
+        )
+    )
+
+    # Generate explanations
+    transactions_df["explanation"] = (
+        transactions_df.apply(
+            explain_transaction,
+            axis=1
+        )
+    )
+
+    # Assign recommendation priority
+    recommendation_order = {
+        "STRONG CANDIDATE": 1,
+        "WORTH CONSIDERING": 2,
+        "LOW PRIORITY": 3
+    }
+
+    transactions_df["recommendation_rank"] = (
+        transactions_df["recommendation"]
+        .map(recommendation_order)
+    )
+
+    # Keep only transactions that improve VOR.
+    if not transactions_df.empty:
+        transactions_df = transactions_df[
+            transactions_df["vor_improvement"] > 0
+        ].copy()
+
+    return transactions_df
 
 def explore_waiver_candidates():
     # Connect to database
@@ -404,11 +454,15 @@ def explore_waiver_candidates():
                 ) + 1
             )
 
-            # Identify whether the transaction leaves a position empty.
+            # Identify positions where the transaction creates or worsens
+            # a shortage below the configured min depth.
             positions_below_minimum = [
                 position
-                for position, count in post_transaction_counts.items()
-                if count < 1
+                for position, post_count in post_transaction_counts.items()
+                if (
+                    post_count < MINIMUM_DEPTH.get(position, 1)
+                    and post_count < position_counts.get(position, 0)
+                )
             ]
 
             # Calculate remaining positional shortages.
@@ -474,39 +528,7 @@ def explore_waiver_candidates():
                 "new_position_gaps": new_position_gaps,
             })
 
-    transactions_df = pd.DataFrame(transaction_rows)
-
-    # Part A: apply classifications
-    transactions_df["recommendation"] = (
-        transactions_df.apply(
-            classify_transaction,
-            axis=1
-        )
-    )
-
-    transactions_df["explanation"] = (
-        transactions_df.apply(
-            explain_transaction,
-            axis=1
-        )
-    )
-
-    RECOMMENDATION_ORDER = {
-        "STRONG CANDIDATE": 1,
-        "WORTH CONSIDERING": 2,
-        "LOW PRIORITY": 3
-    }
-
-    transactions_df["recommendation_rank"] = (
-        transactions_df["recommendation"]
-        .map(RECOMMENDATION_ORDER)
-    )
-
-    # Keep only transactions that improve VOR.
-    if not transactions_df.empty:
-        transactions_df = transactions_df[
-            transactions_df["vor_improvement"] > 0
-        ].copy()
+    transactions_df = process_transactions(transaction_rows)
 
     # Validate positional minimum depth safeguard
     invalid_depth_transacations = transactions_df[
@@ -516,23 +538,33 @@ def explore_waiver_candidates():
     ]
 
     print("\n===== POSITIONAL DEPTH VALIDATION =====")
-    print(
-        f"Transactions evaluated: {len(transactions_df)}"
-    )
-    print(
-        f"Transactions violating minimum depth: "
-        f"{len(invalid_depth_transacations)}"
-    )
-
-    if invalid_depth_transacations.empty:
-        print("PASS: No transactions violate minimum positional depth.")
+    if transactions_df.empty:
+        print("Transactions evaluated: 0")
+        print("Transactions violating minimum depth: 0")
+        print("N/A: No transactions available to validate.")
     else:
-        print("WARNING: Some transactions violate minimum positional depth.")
+        invalid_depth_transacations = transactions_df[
+            transactions_df["positions_below_minimum"].apply(
+                lambda positions: len(positions) > 0
+            )
+        ]
         print(
-            invalid_depth_transacations[
-                ["pickup", "drop", "positions_below_minimum"]
-            ].to_string(index=False)
+            f"Transactions evaluated: {len(transactions_df)}"
         )
+        print(
+            f"Transactions violating minimum depth: "
+            f"{len(invalid_depth_transacations)}"
+        )
+
+        if invalid_depth_transacations.empty:
+            print("PASS: No transactions violate minimum positional depth.")
+        else:
+            print("WARNING: Some transactions violate minimum positional depth.")
+            print(
+                invalid_depth_transacations[
+                    ["pickup", "drop", "positions_below_minimum"]
+                ].to_string(index=False)
+            )
 
     # Print recommendation summary
     print("\n===== RECOMMENDATION SUMMARY =====")
@@ -545,19 +577,20 @@ def explore_waiver_candidates():
     else:
         print("No positive-VOR transactions found.")
 
-    # Sort transactions
-    transactions_df = transactions_df.sort_values(
-        by=[
-            "recommendation_rank",
-            "weighted_gap_improvement",
-            "vor_improvement"
-        ],
-        ascending=[
-            True,
-            False,
-            False
-        ]
-    )
+    if not transactions_df.empty:
+        # Sort transactions
+        transactions_df = transactions_df.sort_values(
+            by=[
+                "recommendation_rank",
+                "weighted_gap_improvement",
+                "vor_improvement"
+            ],
+            ascending=[
+                True,
+                False,
+                False
+            ]
+        )
 
     print("\n===== TOP POTENTIAL ADD/DROP TRANSACTIONS =====")
     print(f"Positive-VOR transactions: {len(transactions_df)}")
