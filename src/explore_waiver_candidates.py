@@ -76,6 +76,70 @@ def classify_transaction(row):
 
     return "LOW PRIORITY"
 
+def explain_transaction(row):
+    pickup = row["pickup"]
+    drop = row["drop"]
+
+    pickup_position = row["pickup_position"]
+    drop_position = row["drop_position"]
+
+    vor_difference = row["vor_improvement"]
+    ppg_difference = row["actual_ppg_difference"]
+    projected_difference = row["projected_ppg_difference"]
+
+    explanation = []
+
+    # Player value
+    explanation.append(
+        f"{pickup} improves VOR by {vor_difference:+.2f} "
+        f"compared to {drop}."
+    )
+
+    # Historical production
+    explanation.append(
+        f"Historical production changes by "
+        f"{ppg_difference:+.2f} PPG."
+    )
+
+    # Positional impact
+    if pickup_position != drop_position:
+        post_drop_depth = row["post_drop_depth"]
+        target_depth = POSITION_TARGETS[drop_position]
+
+        explanation.append(
+            f"Adds {pickup_position} depth but reduces "
+            f"{drop_position} depth to {post_drop_depth} "
+            f"(target: {target_depth})."
+        )
+    else:
+        explanation.append(
+            f"Maintains {drop_position} positional depth "
+            f"at {row['post_drop_depth']} players."
+        )
+
+    # Projection comparison
+    if pd.notna(projected_difference):
+        if projected_difference > 0:
+            explanation.append(
+                f"Projection supports the move "
+                f"({projected_difference:+.2f} PPG)."
+            )
+        elif projected_difference < 0:
+            explanation.append(
+                f"Projection conflicts with historical results "
+                f"({projected_difference:+.2f} PPG)."
+            )
+        else:
+            explanation.append(
+                "Projected production is approximately equal."
+            )
+    else:
+        explanation.append(
+            "Projection comparison is unavailable."
+        )
+
+    return " ".join(explanation)
+
 def explore_waiver_candidates():
     # Connect to database
     connection = sqlite3.connect(DATABASE_PATH) 
@@ -420,6 +484,13 @@ def explore_waiver_candidates():
         )
     )
 
+    transactions_df["explanation"] = (
+        transactions_df.apply(
+            explain_transaction,
+            axis=1
+        )
+    )
+
     RECOMMENDATION_ORDER = {
         "STRONG CANDIDATE": 1,
         "WORTH CONSIDERING": 2,
@@ -436,6 +507,32 @@ def explore_waiver_candidates():
         transactions_df = transactions_df[
             transactions_df["vor_improvement"] > 0
         ].copy()
+
+    # Validate positional minimum depth safeguard
+    invalid_depth_transacations = transactions_df[
+        transactions_df["positions_below_minimum"].apply(
+            lambda positions: len(positions) > 0
+        )
+    ]
+
+    print("\n===== POSITIONAL DEPTH VALIDATION =====")
+    print(
+        f"Transactions evaluated: {len(transactions_df)}"
+    )
+    print(
+        f"Transactions violating minimum depth: "
+        f"{len(invalid_depth_transacations)}"
+    )
+
+    if invalid_depth_transacations.empty:
+        print("PASS: No transactions violate minimum positional depth.")
+    else:
+        print("WARNING: Some transactions violate minimum positional depth.")
+        print(
+            invalid_depth_transacations[
+                ["pickup", "drop", "positions_below_minimum"]
+            ].to_string(index=False)
+        )
 
     # Print recommendation summary
     print("\n===== RECOMMENDATION SUMMARY =====")
@@ -478,7 +575,8 @@ def explore_waiver_candidates():
             "new_position_gaps",
             "vor_improvement",
             "actual_ppg_difference",
-            "projected_ppg_difference"
+            "projected_ppg_difference",
+            "explanation"
         ]
 
         print(
