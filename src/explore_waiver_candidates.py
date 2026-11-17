@@ -29,6 +29,52 @@ POSITION_WEIGHTS = {
     "WR": 2.0,
     "TE": 1.0,
 }
+MINIMUM_DEPTH = {
+    "QB": 1,
+    "RB": 3,
+    "WR": 2,
+    "TE": 1,
+}
+STRONG_VOR_THRESHOLD = 2.0
+CONSIDER_VOR_THRESHOLD = 0.5
+
+def classify_transaction(row):
+    drop_position = row["drop_position"]
+    minimum_depth = MINIMUM_DEPTH.get(drop_position, 1)
+    depth_is_acceptable = (
+        row["post_drop_depth"] >= minimum_depth
+    )
+    production_improves = (
+        pd.notna(row["actual_ppg_difference"])
+        and row["actual_ppg_difference"] >= 0
+    )
+    value_improves = row["vor_improvement"]
+    weighted_gap_improvement = (
+        row["weighted_gap_improvement"]
+    )
+
+    # Reject transactions that leave insufficient depth
+    if not depth_is_acceptable:
+        return "LOW PRIORITY"
+
+    # Strong candidate: improves player value and production
+    if (
+        value_improves >= STRONG_VOR_THRESHOLD
+        and production_improves
+        and weighted_gap_improvement >= 0
+    ):
+        return "STRONG CANDIDATE"
+
+    # Worth considering: positive player value and production
+    # w/ no major positional depth problem
+    if (
+        value_improves >= CONSIDER_VOR_THRESHOLD
+        and production_improves
+        and weighted_gap_improvement >= 0
+    ):
+        return "WORTH CONSIDERING"
+
+    return "LOW PRIORITY"
 
 def explore_waiver_candidates():
     # Connect to database
@@ -354,7 +400,7 @@ def explore_waiver_candidates():
                 "post_pickup_depth": post_transaction_counts.get(
                     pickup_position, 0
                 ),  
-                "post_pickup_depth": post_transaction_counts.get(
+                "post_drop_depth": post_transaction_counts.get(
                     drop_player["position"], 0
                 ),  
                 "positional_gap_improvement": positional_gap_improvement,
@@ -366,27 +412,61 @@ def explore_waiver_candidates():
 
     transactions_df = pd.DataFrame(transaction_rows)
 
+    # Part A: apply classifications
+    transactions_df["recommendation"] = (
+        transactions_df.apply(
+            classify_transaction,
+            axis=1
+        )
+    )
+
+    RECOMMENDATION_ORDER = {
+        "STRONG CANDIDATE": 1,
+        "WORTH CONSIDERING": 2,
+        "LOW PRIORITY": 3
+    }
+
+    transactions_df["recommendation_rank"] = (
+        transactions_df["recommendation"]
+        .map(RECOMMENDATION_ORDER)
+    )
+
     # Keep only transactions that improve VOR.
     if not transactions_df.empty:
         transactions_df = transactions_df[
             transactions_df["vor_improvement"] > 0
         ].copy()
 
-        transactions_df = transactions_df.sort_values(
-            by=[
-                "weighted_gap_improvement",
-                "vor_improvement"
-            ],
-            ascending=[
-                False,
-                False
-            ]
+    # Print recommendation summary
+    print("\n===== RECOMMENDATION SUMMARY =====")
+    if not transactions_df.empty:
+        print(
+            transactions_df["recommendation"]
+            .value_counts()
+            .to_string()
         )
+    else:
+        print("No positive-VOR transactions found.")
+
+    # Sort transactions
+    transactions_df = transactions_df.sort_values(
+        by=[
+            "recommendation_rank",
+            "weighted_gap_improvement",
+            "vor_improvement"
+        ],
+        ascending=[
+            True,
+            False,
+            False
+        ]
+    )
 
     print("\n===== TOP POTENTIAL ADD/DROP TRANSACTIONS =====")
     print(f"Positive-VOR transactions: {len(transactions_df)}")
     if not transactions_df.empty:
         display_columns = [
+            "recommendation",
             "pickup",
             "pickup_position",
             "drop",
