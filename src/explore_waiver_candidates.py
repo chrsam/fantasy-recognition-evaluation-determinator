@@ -2,6 +2,7 @@
 import sqlite3
 import pandas as pd
 from pathlib import Path
+from src.calculate_recent_performance import calculate_recent_performance
 
 # Locate database
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -37,6 +38,47 @@ MINIMUM_DEPTH = {
 }
 STRONG_VOR_THRESHOLD = 2.0
 CONSIDER_VOR_THRESHOLD = 0.5
+
+def classify_recent_form(transaction):
+    """Classify how recent performances support a transaction."""
+
+    pickup_freshness = transaction.get(
+        "pickup_freshness", "UNKNOWN"
+    )
+    drop_freshness = transaction.get(
+        "drop_freshness", "UNKNOWN"
+    )
+    last_3_difference = transaction.get(
+        "recent_ppg_difference", float("nan")
+    )
+    last_5_difference = transaction.get(
+        "recent_5_ppg_difference", float("nan")
+    )
+
+    # Missing or unknown history cannot support a transaction.
+    if (
+        pd.isna(last_3_difference)
+        or pd.isna(last_5_difference)
+        or pickup_freshness == "UNKNOWN"
+        or drop_freshness == "UNKNOWN"
+    ):
+        return "INSUFFICIENT DATA"
+
+    # Older history is less useful for immediate decisions.
+    if (
+        pickup_freshness == "STALE"
+        or drop_freshness == "STALE"
+    ):
+        return "STALE DATA"
+
+    if last_3_difference > 0 and last_5_difference > 0:
+        return "SUPPORTS PICKUP"
+
+    if last_3_difference < 0 and last_5_difference < 0:
+        return "CAUTION"
+
+    return "MIXED"
+    
 
 def classify_transaction(row):
     drop_position = row["drop_position"]
@@ -153,6 +195,10 @@ def process_transactions(transaction_rows):
     transactions_df = pd.DataFrame(transaction_rows)
     if transactions_df.empty:
         return transactions_df
+
+    transactions_df["recent_form_signal"] = (
+        transactions_df.apply(classify_recent_form, axis=1)
+    )
     
     # Apply recommendation classifications
     transactions_df["recommendation"] = (
@@ -257,6 +303,14 @@ def explore_waiver_candidates():
 
     finally:
         connection.close()
+
+    # Load historical performance metrics.
+    recent_performance_df = calculate_recent_performance()
+    recent_performance_lookup = (
+        recent_performance_df
+        .set_index("player_id")
+        .to_dict("index")
+    )
 
     # Load VOR rankings
     vor_df = pd.read_csv(VOR_PATH)
@@ -391,9 +445,50 @@ def explore_waiver_candidates():
     # Identify potential add/drop transactions.
     # Compare each eligible free agent against every healthy
     # active bench player, regardless of position.
+    print("\nCandidate player ID available:", "player_id" in eligible_candidates.columns)
+    print("Bench player ID available:", "player_id" in bench_df.columns)
     transaction_rows = []
     for _, candidate in eligible_candidates.iterrows():
         for _, drop_player in bench_df.iterrows():
+            # Look up recent performance using ESPN player IDs.
+            pickup_recent = recent_performance_lookup.get(
+                int(candidate["player_id"]), {}
+            )
+
+            drop_recent = recent_performance_lookup.get(
+                int(drop_player["player_id"]), {}
+            )
+
+            pickup_last_3 = pickup_recent.get(
+                "last_3_ppg", float("nan")
+            )
+
+            drop_last_3 = drop_recent.get(
+                "last_3_ppg", float("nan")
+            )
+
+            pickup_last_5 = pickup_recent.get(
+                "last_5_ppg", float("nan")
+            )
+
+            drop_last_5 = drop_recent.get(
+                "last_5_ppg", float("nan")
+            )
+
+            # Calculate recent scoring differences only when
+            # both players have sufficient recorded games.
+            recent_ppg_difference = float("nan")
+            if pd.notna(pickup_last_3) and pd.notna(drop_last_3):
+                recent_ppg_difference = (
+                    pickup_last_3 - drop_last_3
+                )
+
+            recent_5_ppg_difference = float("nan")
+            if pd.notna(pickup_last_5) and pd.notna(drop_last_5):
+                recent_5_ppg_difference = (
+                    pickup_last_5 - drop_last_5
+                )
+
             # Calculate the diference in VOR.
             vor_improvement = (
                 candidate["vor"] - drop_player["vor"]
@@ -507,6 +602,18 @@ def explore_waiver_candidates():
                 "pickup_position": candidate["position"],
                 "drop": drop_player["player_name"],
                 "drop_position": drop_player["position"],
+                "pickup_last_3_ppg": pickup_last_3,
+                "drop_last_3_ppg": drop_last_3,
+                "recent_ppg_difference": recent_ppg_difference,
+                "pickup_last_5_ppg": pickup_last_5,
+                "drop_last_5_ppg": drop_last_5,
+                "recent_5_ppg_difference": recent_5_ppg_difference,
+                "pickup_freshness": pickup_recent.get(
+                    "performance_freshness", "UNKNOWN"
+                ),
+                "drop_freshness": drop_recent.get(
+                    "performance_freshness", "UNKNOWN"
+                ),
                 "pickup_vor": candidate["vor"],
                 "drop_vor": drop_player["vor"],
                 "vor_improvement": vor_improvement,
@@ -592,6 +699,44 @@ def explore_waiver_candidates():
             ]
         )
 
+    # Compare recent performances across strong candidates.
+    if not transactions_df.empty:
+        strong_candidates = transactions_df[
+            transactions_df["recommendation"] == "STRONG CANDIDATE"
+        ].copy()
+
+        if not strong_candidates.empty:
+            print("\n===== STRONG CANDIDATE RECENT PERFORMANCE =====")
+
+            comparison_columns = [
+                "pickup",
+                "pickup_position",
+                "drop",
+                "drop_position",
+                "vor_improvement",
+                "actual_ppg_difference",
+                "pickup_last_3_ppg",
+                "drop_last_3_ppg",
+                "recent_ppg_difference",
+                "pickup_last_5_ppg",
+                "drop_last_5_ppg",
+                "recent_5_ppg_difference",
+                "pickup_freshness",
+                "drop_freshness", 
+                "recent_form_signal",
+            ]
+
+            print(
+                strong_candidates[comparison_columns]
+                .round(2)
+                .sort_values(
+                    "recent_ppg_difference",
+                    ascending=False,
+                    na_position="last"
+                )
+                .to_string(index=False)
+            )
+
     print("\n===== TOP POTENTIAL ADD/DROP TRANSACTIONS =====")
     print(f"Positive-VOR transactions: {len(transactions_df)}")
     if not transactions_df.empty:
@@ -609,6 +754,11 @@ def explore_waiver_candidates():
             "vor_improvement",
             "actual_ppg_difference",
             "projected_ppg_difference",
+            "pickup_last_3_ppg",
+            "drop_last_3_ppg",
+            "recent_ppg_difference",
+            "pickup_freshness",
+            "drop_freshness",
             "explanation"
         ]
 

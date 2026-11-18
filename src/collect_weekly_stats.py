@@ -8,6 +8,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 OUTPUT_PATH = BASE_DIR / "data" / "player_weekly_stats.csv"
 ESPN_SEASON = 2026
 POSITIONS = ["QB", "RB", "WR", "TE"]
+BATCH_SIZE = 10
 
 def extract_weekly_stats(player):
     """Extract actual weekly fantasy scores for one player."""
@@ -66,8 +67,52 @@ def collect_weekly_stats():
     print(f"Total unique players: {len(players_by_id)}")
 
     weekly_records = []
-    for player in players_by_id.values():
-        weekly_records.extend(extract_weekly_stats(player))
+
+    player_ids = list(players_by_id.keys())
+
+    total_batches = (
+        len(player_ids) + BATCH_SIZE - 1
+    ) // BATCH_SIZE
+
+    for start in range(0, len(player_ids), BATCH_SIZE):
+        batch_ids = player_ids[start:start + BATCH_SIZE]
+        batch_number = start // BATCH_SIZE + 1
+
+        print(
+            f"Retrieving batch {batch_number}/{total_batches} "
+            f"{len(batch_ids)} players"
+        )
+
+        try:
+            detailed_players = league.player_info(
+                playerId=batch_ids
+            )
+
+            if not isinstance(detailed_players, list):
+                detailed_players = [detailed_players]
+
+            returned_ids = {
+                player.playerId for player in detailed_players
+            }
+
+            missing_ids = set(batch_ids) - returned_ids
+
+            if missing_ids:
+                raise ValueError(
+                    f"Batch {batch_number} returned incomplete data. "
+                    f"Missing player IDs: {sorted(missing_ids)}"
+                )
+
+            for player in detailed_players:
+                weekly_records.extend(
+                    extract_weekly_stats(player)
+                )
+
+        except Exception as error:
+            print(
+                f"ERROR retrieving batch {batch_number}: {error}"
+            )
+            raise
 
     columns = [
         "season",
