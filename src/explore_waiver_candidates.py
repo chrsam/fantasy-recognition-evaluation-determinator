@@ -405,7 +405,7 @@ def explore_waiver_candidates():
         print(
             skill_roster_df.loc[
                 missing_vor,
-                ["player_name", position]
+                ["player_name", "position"]
             ].to_string(index=False)
         )
 
