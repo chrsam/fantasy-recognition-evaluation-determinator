@@ -357,11 +357,10 @@ def explore_waiver_candidates():
         & (roster_df["position"].isin(POSITION_TARGETS))
     ].copy()
 
-    position_counts = (
-        usable_roster_df["position"]
-        .value_counts()
-        .to_dict()
-    )
+    position_counts: dict[str, int] = {
+        str(position): int(count)
+        for position, count in usable_roster_df["position"].value_counts().items()
+    }
 
     position_gaps = {}
 
